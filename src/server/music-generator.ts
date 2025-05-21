@@ -17,12 +17,23 @@ const SCALES: Record<Scale, number[]> = {
 
 // State variables
 let currentKey = Math.floor(Math.random() * 12); // 0-11 for C through B
-let currentScale: Scale = "major";
+let currentScale: Scale = "mixolydian"; // Default to mixolydian for SF Streets
 let lastModeChangeTime = Date.now();
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 let _noteCounter = 0;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 let density = 0.7; // Probability of generating a note vs. silence
+
+// Track last time sustain pedal was turned off
+let lastSustainOffTime = Date.now();
+let sustainPedalEnabled = true;
+
+// 12-tone serialist implementation
+const CHROMATIC_NOTES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+let usedNotes = new Set<number>();
+let serialistMode = true; // Enable 12-tone serialist approach
+let notesToneRowLength = 0; // Counter for tracking tone row progress
+let repeatNoteChance = 0.15; // Chance of allowing a note to repeat
 
 // Apply weather influence to music parameters
 function applyWeatherInfluence(weather: WeatherData | null) {
@@ -122,7 +133,7 @@ function applyWeatherInfluence(weather: WeatherData | null) {
 // Weather influence settings
 const defaultSettings = {
   tempo: 100, // Base tempo (events per minute)
-  density: 0.7, // Probability of generating notes vs. silence
+  density: 0.6, // Probability of generating notes vs. silence (reduced from 0.7)
   minOctave: 1, // Minimum octave
   maxOctave: 7, // Maximum octave
   sustainProbability: 0.05, // Probability of using sustain pedal
@@ -135,15 +146,74 @@ function getScaleNotes(): number[] {
   return SCALES[currentScale].map((interval) => (currentKey + interval) % 12);
 }
 
+// Helper function for 12-tone serialist approach
+function getNextSerialNote(): number {
+  // If all 12 notes have been used, reset the tracking but only 60% of the time
+  // This allows the tone row to occasionally extend beyond 12 notes
+  if (usedNotes.size === 12 && Math.random() < 0.6) {
+    usedNotes.clear();
+    notesToneRowLength = 0;
+  }
+  
+  // Track how many notes we've used in this tone row
+  notesToneRowLength++;
+  
+  // Occasionally allow note repetition (but only after using at least 5 different notes)
+  // This makes the serialist approach less strict, more musical
+  const shouldAllowRepetition = usedNotes.size >= 5 && Math.random() < repeatNoteChance;
+  
+  if (shouldAllowRepetition) {
+    // Get a previously used note for repetition
+    const usedNoteArray = Array.from(usedNotes);
+    // Only repeat a note that has been used a while ago (prefer notes from earlier in the row)
+    const earlierUsedNotes = usedNoteArray.slice(0, Math.ceil(usedNoteArray.length * 0.6));
+    if (earlierUsedNotes.length > 0) {
+      return earlierUsedNotes[Math.floor(Math.random() * earlierUsedNotes.length)];
+    }
+  }
+  
+  // Find a note that hasn't been used yet
+  const availableNotes = CHROMATIC_NOTES.filter(note => !usedNotes.has(note));
+  
+  // If we have available notes, pick one that's preferably in the mixolydian scale
+  if (availableNotes.length > 0) {
+    const mixolydianNotes = SCALES.mixolydian.map((interval) => (currentKey + interval) % 12);
+    const inScaleAvailableNotes = availableNotes.filter(note => mixolydianNotes.includes(note));
+    
+    // If we have notes that are both unused and in scale, prefer those
+    // Otherwise use any available note to maintain 12-tone serialist approach
+    const notePool = inScaleAvailableNotes.length > 0 ? inScaleAvailableNotes : availableNotes;
+    const selectedIndex = Math.floor(Math.random() * notePool.length);
+    const selectedNote = notePool[selectedIndex];
+    
+    // Mark this note as used
+    usedNotes.add(selectedNote);
+    return selectedNote;
+  } else {
+    // Fallback case - should never happen but just in case
+    const selectedNote = Math.floor(Math.random() * 12);
+    usedNotes.add(selectedNote);
+    return selectedNote;
+  }
+}
+
 // Helper function to generate a random note in the current key and scale
 function generateRandomNote(
   weather: WeatherData | null,
   customOctaveRange?: { min: number; max: number },
 ): Note {
   const settings = applyWeatherInfluence(weather);
-  const scaleNotes = getScaleNotes();
-  const noteIndex = Math.floor(Math.random() * scaleNotes.length);
-  const note = scaleNotes[noteIndex];
+  
+  // Note selection based on whether we're using serialist approach or not
+  let note;
+  if (serialistMode) {
+    note = getNextSerialNote();
+  } else {
+    // Original approach using scale
+    const scaleNotes = getScaleNotes();
+    const noteIndex = Math.floor(Math.random() * scaleNotes.length);
+    note = scaleNotes[noteIndex];
+  }
 
   // Use custom octave range if provided, otherwise use weather-influenced range
   const octaveRange = customOctaveRange || {
@@ -207,11 +277,15 @@ function generateChord(weather: WeatherData | null, numNotes = 3): Note[] {
     duration: rootDuration,
   });
 
-  // Add other chord tones (using 3rds)
+  // Add other chord tones (using mixolydian-appropriate intervals)
   for (let i = 1; i < numNotes; i++) {
-    const nextIndex = (rootIndex + i * 2) % scaleNotes.length;
-    const nextNote = scaleNotes[nextIndex];
-    const nextOctave = rootOctave + (nextIndex < rootIndex ? 1 : 0);
+    // Prefer intervals that are common in mixolydian (2, 4, 5, 7, 10 - these are the 2nd, 3rd, 4th, 5th, and b7th degrees)
+    const mixolydianIntervals = [2, 4, 5, 7, 10];
+    const intervalIndex = Math.floor(Math.random() * mixolydianIntervals.length);
+    const interval = mixolydianIntervals[intervalIndex];
+    
+    const nextNote = (rootNote + interval) % 12;
+    const nextOctave = rootOctave + (nextNote < rootNote && interval > 6 ? 1 : 0);
 
     chordNotes.push({
       name: NOTES[nextNote],
@@ -233,30 +307,55 @@ function maybeChangeMusicalContext(): void {
 
   // Change approximately every 3-5 minutes
   if (now - lastModeChangeTime > 3 * 60 * 1000 && Math.random() < 0.01) {
-    // 1% chance per check when we're past the minimum time
-    const changeType = Math.floor(Math.random() * 3);
+    // For SF Streets, we want to maintain mixolydian mode but can change key
+    const changeType = Math.floor(Math.random() * 2); // 0: change key, 1: change both but keep mixolydian
 
     if (changeType === 0) {
-      // Change key
+      // Change key only
       currentKey = Math.floor(Math.random() * 12);
-    } else if (changeType === 1) {
-      // Change scale
-      const scaleNames = Object.keys(SCALES) as Scale[];
-      currentScale = scaleNames[Math.floor(Math.random() * scaleNames.length)];
     } else {
-      // Change both
+      // Change key but ensure scale stays mixolydian
       currentKey = Math.floor(Math.random() * 12);
-      const scaleNames = Object.keys(SCALES) as Scale[];
-      currentScale = scaleNames[Math.floor(Math.random() * scaleNames.length)];
+      // 90% chance to stay in mixolydian mode
+      if (Math.random() > 0.9) {
+        // 10% chance to briefly use another mode before returning to mixolydian
+        const otherScales: Scale[] = ["dorian", "phrygian", "lydian"];
+        currentScale = otherScales[Math.floor(Math.random() * otherScales.length)];
+        
+        // Schedule a return to mixolydian after a short period (15-30 seconds)
+        setTimeout(() => {
+          currentScale = "mixolydian";
+        }, 15000 + Math.random() * 15000);
+      } else {
+        currentScale = "mixolydian";
+      }
     }
 
     lastModeChangeTime = now;
   }
 }
 
-// Track last time sustain pedal was turned off
-let lastSustainOffTime = Date.now();
-let sustainPedalEnabled = true;
+// Track urban sound pattern variables
+let trafficIntensity = 0.5; // 0-1 scale for traffic intensity
+let lastTrafficChange = Date.now();
+let windRhythmCounter = 0; // Counter for wind rhythm patterns
+let conversationDensity = 0.2; // Reduced likelihood of conversation sounds (was 0.3)
+
+// Helper function to gradually change traffic intensity (ebb and flow)
+function updateTrafficIntensity(): number {
+  const now = Date.now();
+  
+  // Update traffic intensity every 10-30 seconds to create ebb and flow
+  if (now - lastTrafficChange > 10000 + Math.random() * 20000) {
+    // Random walk with bounds
+    trafficIntensity += (Math.random() * 0.4) - 0.2;
+    // Keep within bounds
+    trafficIntensity = Math.max(0.1, Math.min(0.9, trafficIntensity));
+    lastTrafficChange = now;
+  }
+  
+  return trafficIntensity;
+}
 
 // Decide which pedal to use
 function decidePedal(weather: WeatherData | null): Pedal | null {
@@ -290,6 +389,95 @@ function decidePedal(weather: WeatherData | null): Pedal | null {
   return null;
 }
 
+// Generate wind sound pattern (constant and rhythmic)
+function generateWindEffect(weather: WeatherData | null): Note[] {
+  const settings = applyWeatherInfluence(weather);
+  const windNotes: Note[] = [];
+  
+  // Wind uses lower register, consistent rhythm
+  const windOctave = Math.floor(Math.random() * 2) + 1; // Lower register (1-2)
+  
+  // Use consistent rhythm - alternate between short and long notes
+  const isLongNote = windRhythmCounter % 4 === 0; // Every 4th note is longer
+  windRhythmCounter++;
+  
+  // Use specific notes for wind effect (chromatic clusters in low register)
+  const baseNote = Math.floor(Math.random() * 4) * 2; // Even numbers only
+  
+  for (let i = 0; i < (isLongNote ? 1 : 2); i++) {
+    const note = (baseNote + i) % 12;
+    windNotes.push({
+      name: NOTES[note],
+      octave: windOctave,
+      midiNumber: note + windOctave * 12 + 12,
+      velocity: Math.floor(Math.random() * 20) + 30, // Quiet (30-50)
+      duration: isLongNote ? 1200 : 300, // Longer sustain for rhythmic effect
+    });
+  }
+  
+  return windNotes;
+}
+
+// Generate traffic sound pattern (varies in intensity)
+function generateTrafficEffect(weather: WeatherData | null): Note[] {
+  const settings = applyWeatherInfluence(weather);
+  const trafficNotes: Note[] = [];
+  
+  // Update traffic intensity to create ebb and flow
+  const intensity = updateTrafficIntensity();
+  
+  // Traffic uses mid-low register with clusters
+  const trafficOctave = 2 + Math.floor(Math.random() * 2); // Mid-low register (2-3)
+  
+  // Number of notes depends on current intensity
+  const noteCount = Math.max(1, Math.floor(intensity * 5)); 
+  
+  for (let i = 0; i < noteCount; i++) {
+    // Use clustered notes to represent traffic hum
+    const note = Math.floor(Math.random() * 12);
+    trafficNotes.push({
+      name: NOTES[note],
+      octave: trafficOctave,
+      midiNumber: note + trafficOctave * 12 + 12,
+      velocity: Math.floor(intensity * 60) + 40, // 40-100 based on intensity
+      duration: 100 + Math.random() * intensity * 1000, // Varies with intensity
+    });
+  }
+  
+  return trafficNotes;
+}
+
+// Generate conversation sound pattern (sporadic, mid-high register, muffled)
+function generateConversationEffect(weather: WeatherData | null): Note[] {
+  const settings = applyWeatherInfluence(weather);
+  const conversationNotes: Note[] = [];
+  
+  // Only generate conversation sometimes (sporadic snippets)
+  if (Math.random() > conversationDensity) {
+    return conversationNotes; // Empty array = no conversation this time
+  }
+  
+  // Conversation uses mid-high register
+  const conversationOctave = 4 + Math.floor(Math.random() * 2); // Mid-high register (4-5)
+  
+  // Generate fewer notes (1-4 instead of 2-5) to represent a sparser snippet of conversation
+  const noteCount = Math.floor(Math.random() * 3) + 1;
+  
+  for (let i = 0; i < noteCount; i++) {
+    // Use serialist approach for note selection
+    const note = getNextSerialNote();
+    conversationNotes.push({
+      name: NOTES[note],
+      octave: conversationOctave,
+      midiNumber: note + conversationOctave * 12 + 12,
+      velocity: Math.floor(Math.random() * 20) + 40, // Quiet (40-60) for muffled effect
+      duration: 100 + Math.random() * 300, // Short duration notes
+    });
+  }
+  
+  return conversationNotes;
+}
+
 // Main function to generate MIDI events
 export function generateMidiEvent(
   weather: WeatherData | null = null,
@@ -321,7 +509,42 @@ export function generateMidiEvent(
   // Decide between note, chord, or counterpoint
   const eventType = Math.random();
 
-  if (eventType < 0.5) {
+  // For SF Streets soundscape, we want to generate a mix of urban sounds and musical elements
+  if (eventType < 0.15) {
+    // Wind effect - constant and rhythmic (reduced from 0.2)
+    return {
+      type: "counterpoint", // Reusing counterpoint for wind effect
+      notes: generateWindEffect(weather),
+      currentKey: NOTES[currentKey],
+      currentScale,
+    };
+  } else if (eventType < 0.25) {
+    // Traffic effect - ebbs and flows (reduced from 0.35)
+    return {
+      type: "chord", // Reusing chord for traffic effect
+      notes: generateTrafficEffect(weather),
+      currentKey: NOTES[currentKey],
+      currentScale,
+    };
+  } else if (eventType < 0.35) {
+    // Conversation effect - muffled snippets (reduced from 0.45)
+    const conversationNotes = generateConversationEffect(weather);
+    if (conversationNotes.length === 0) {
+      // No conversation this time, fall back to regular note
+      return {
+        type: "note",
+        note: generateRandomNote(weather),
+        currentKey: NOTES[currentKey],
+        currentScale,
+      };
+    }
+    return {
+      type: "counterpoint", // Reusing counterpoint for conversation snippets
+      notes: conversationNotes,
+      currentKey: NOTES[currentKey],
+      currentScale,
+    };
+  } else if (eventType < 0.7) {
     // Generate a single note
     return {
       type: "note",
