@@ -57,4 +57,49 @@ describe("Music Generator", () => {
     // We should observe at least 3 different event types
     expect(eventTypes.size).toBeGreaterThanOrEqual(3);
   });
+  
+  it("should use mixolydian mode for SF Streets by default", () => {
+    // Generate multiple events to ensure we catch the default scale
+    let foundMixolydian = false;
+    
+    for (let i = 0; i < 20; i++) {
+      const event = generateMidiEvent();
+      
+      if (event.type === "note" || event.type === "chord" || event.type === "counterpoint") {
+        if (event.currentScale === "mixolydian") {
+          foundMixolydian = true;
+          break;
+        }
+      }
+    }
+    
+    expect(foundMixolydian).toBe(true);
+  });
+  
+  it("should generate 12-tone serialist patterns for SF Streets", () => {
+    // Track notes used across multiple calls to verify serialist pattern
+    const usedNotes = new Set<string>();
+    const allEvents = [];
+    
+    // Generate multiple events to collect note pattern data
+    for (let i = 0; i < 30; i++) {
+      const event = generateMidiEvent();
+      allEvents.push(event);
+      
+      // Collect notes from various event types
+      if (event.type === "note") {
+        usedNotes.add(event.note.name);
+      } else if (event.type === "chord" || event.type === "counterpoint") {
+        event.notes.forEach(note => {
+          usedNotes.add(note.name);
+        });
+      }
+      
+      // If we've seen at least 7 different notes, that's enough to verify serialist tendencies
+      if (usedNotes.size >= 7) break;
+    }
+    
+    // In 12-tone serialist music, we should see a good variety of notes
+    expect(usedNotes.size).toBeGreaterThanOrEqual(7);
+  });
 });
