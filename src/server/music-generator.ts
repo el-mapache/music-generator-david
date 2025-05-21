@@ -32,6 +32,8 @@ let sustainPedalEnabled = true;
 const CHROMATIC_NOTES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 let usedNotes = new Set<number>();
 let serialistMode = true; // Enable 12-tone serialist approach
+let notesToneRowLength = 0; // Counter for tracking tone row progress
+let repeatNoteChance = 0.15; // Chance of allowing a note to repeat
 
 // Apply weather influence to music parameters
 function applyWeatherInfluence(weather: WeatherData | null) {
@@ -131,7 +133,7 @@ function applyWeatherInfluence(weather: WeatherData | null) {
 // Weather influence settings
 const defaultSettings = {
   tempo: 100, // Base tempo (events per minute)
-  density: 0.7, // Probability of generating notes vs. silence
+  density: 0.6, // Probability of generating notes vs. silence (reduced from 0.7)
   minOctave: 1, // Minimum octave
   maxOctave: 7, // Maximum octave
   sustainProbability: 0.05, // Probability of using sustain pedal
@@ -146,9 +148,28 @@ function getScaleNotes(): number[] {
 
 // Helper function for 12-tone serialist approach
 function getNextSerialNote(): number {
-  // If all 12 notes have been used, reset the tracking
-  if (usedNotes.size === 12) {
+  // If all 12 notes have been used, reset the tracking but only 60% of the time
+  // This allows the tone row to occasionally extend beyond 12 notes
+  if (usedNotes.size === 12 && Math.random() < 0.6) {
     usedNotes.clear();
+    notesToneRowLength = 0;
+  }
+  
+  // Track how many notes we've used in this tone row
+  notesToneRowLength++;
+  
+  // Occasionally allow note repetition (but only after using at least 5 different notes)
+  // This makes the serialist approach less strict, more musical
+  const shouldAllowRepetition = usedNotes.size >= 5 && Math.random() < repeatNoteChance;
+  
+  if (shouldAllowRepetition) {
+    // Get a previously used note for repetition
+    const usedNoteArray = Array.from(usedNotes);
+    // Only repeat a note that has been used a while ago (prefer notes from earlier in the row)
+    const earlierUsedNotes = usedNoteArray.slice(0, Math.ceil(usedNoteArray.length * 0.6));
+    if (earlierUsedNotes.length > 0) {
+      return earlierUsedNotes[Math.floor(Math.random() * earlierUsedNotes.length)];
+    }
   }
   
   // Find a note that hasn't been used yet
@@ -318,7 +339,7 @@ function maybeChangeMusicalContext(): void {
 let trafficIntensity = 0.5; // 0-1 scale for traffic intensity
 let lastTrafficChange = Date.now();
 let windRhythmCounter = 0; // Counter for wind rhythm patterns
-let conversationDensity = 0.3; // Likelihood of conversation sounds
+let conversationDensity = 0.2; // Reduced likelihood of conversation sounds (was 0.3)
 
 // Helper function to gradually change traffic intensity (ebb and flow)
 function updateTrafficIntensity(): number {
@@ -439,8 +460,8 @@ function generateConversationEffect(weather: WeatherData | null): Note[] {
   // Conversation uses mid-high register
   const conversationOctave = 4 + Math.floor(Math.random() * 2); // Mid-high register (4-5)
   
-  // Generate 2-5 notes to represent a snippet of conversation
-  const noteCount = Math.floor(Math.random() * 4) + 2;
+  // Generate fewer notes (1-4 instead of 2-5) to represent a sparser snippet of conversation
+  const noteCount = Math.floor(Math.random() * 3) + 1;
   
   for (let i = 0; i < noteCount; i++) {
     // Use serialist approach for note selection
@@ -489,24 +510,24 @@ export function generateMidiEvent(
   const eventType = Math.random();
 
   // For SF Streets soundscape, we want to generate a mix of urban sounds and musical elements
-  if (eventType < 0.2) {
-    // Wind effect - constant and rhythmic
+  if (eventType < 0.15) {
+    // Wind effect - constant and rhythmic (reduced from 0.2)
     return {
       type: "counterpoint", // Reusing counterpoint for wind effect
       notes: generateWindEffect(weather),
       currentKey: NOTES[currentKey],
       currentScale,
     };
-  } else if (eventType < 0.35) {
-    // Traffic effect - ebbs and flows
+  } else if (eventType < 0.25) {
+    // Traffic effect - ebbs and flows (reduced from 0.35)
     return {
       type: "chord", // Reusing chord for traffic effect
       notes: generateTrafficEffect(weather),
       currentKey: NOTES[currentKey],
       currentScale,
     };
-  } else if (eventType < 0.45) {
-    // Conversation effect - muffled snippets
+  } else if (eventType < 0.35) {
+    // Conversation effect - muffled snippets (reduced from 0.45)
     const conversationNotes = generateConversationEffect(weather);
     if (conversationNotes.length === 0) {
       // No conversation this time, fall back to regular note
