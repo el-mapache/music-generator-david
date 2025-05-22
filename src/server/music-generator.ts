@@ -1,4 +1,11 @@
-import { MidiEvent, Note, Scale, Pedal, WeatherData } from "../shared/types";
+import {
+  MidiEvent,
+  Note,
+  Scale,
+  Pedal,
+  WeatherData,
+  MicrophoneData,
+} from "../shared/types";
 
 // Music theory constants
 const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -23,6 +30,27 @@ let lastModeChangeTime = Date.now();
 let _noteCounter = 0;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 let density = 0.7; // Probability of generating a note vs. silence
+
+// Store selected scales for microphone-influenced music
+let primaryScale: Scale = "major";
+let secondaryScales: Scale[] = ["minor", "lydian"];
+let noteCountInMeasure = 4; // Default 4/4 time signature
+
+// Initialize scales on first run
+(function initializeScales() {
+  // Pick a random primary scale
+  const scaleNames = Object.keys(SCALES) as Scale[];
+  primaryScale = scaleNames[Math.floor(Math.random() * scaleNames.length)];
+
+  // Select compatible secondary scales
+  secondaryScales = selectCompatibleScales(primaryScale);
+
+  // Initially set the current scale to primary
+  currentScale = primaryScale;
+
+  console.log(`Music initialized with primary scale: ${primaryScale}`);
+  console.log(`Compatible scales selected: ${secondaryScales.join(", ")}`);
+})();
 
 // Apply weather influence to music parameters
 function applyWeatherInfluence(weather: WeatherData | null) {
@@ -130,6 +158,129 @@ const defaultSettings = {
   noteDurationRange: { min: 500, max: 2500 }, // Duration range in ms
 };
 
+// Select compatible scales based on a primary scale
+function selectCompatibleScales(primary: Scale): Scale[] {
+  // Define scale compatibility map (scales that sound good together)
+  const compatibilityMap: Record<Scale, Scale[]> = {
+    major: ["lydian", "mixolydian", "pentatonicMajor"],
+    minor: ["dorian", "phrygian", "pentatonicMinor"],
+    dorian: ["minor", "mixolydian", "pentatonicMinor"],
+    phrygian: ["minor", "locrian"],
+    lydian: ["major", "mixolydian"],
+    mixolydian: ["major", "dorian"],
+    locrian: ["phrygian", "minor"],
+    pentatonicMajor: ["major", "lydian"],
+    pentatonicMinor: ["minor", "dorian"],
+    wholeTone: ["lydian", "major"], // Whole tone is fairly unique, but can work with these
+  };
+
+  // Get compatible scales for the primary
+  const compatibles = compatibilityMap[primary];
+
+  // Randomly select two (or fewer if not enough options)
+  const selected: Scale[] = [];
+
+  // Create a copy of the array to avoid modifying the original
+  const options = [...compatibles];
+
+  // Select up to 2 scales
+  for (let i = 0; i < 2 && options.length > 0; i++) {
+    const index = Math.floor(Math.random() * options.length);
+    selected.push(options[index]);
+    options.splice(index, 1); // Remove selected scale from options
+  }
+
+  return selected;
+}
+
+// Apply microphone influence to music parameters
+function applyMicrophoneInfluence(
+  mic: MicrophoneData | null,
+  settings: typeof defaultSettings,
+) {
+  // If no microphone data or mic is inactive, return settings unmodified
+  if (!mic || !mic.isActive) {
+    return settings;
+  }
+
+  // Modify tempo based on volume
+  // Louder = faster, quieter = slower
+  if (mic.volume > 0.6) {
+    // Very loud
+    settings.tempo = 140;
+    settings.noteDurationRange = { min: 200, max: 1000 };
+  } else if (mic.volume > 0.3) {
+    // Moderate volume
+    settings.tempo = 100 + Math.floor(mic.volume * 60); // 100-130
+    settings.noteDurationRange = { min: 300, max: 1500 };
+  } else {
+    // Soft
+    settings.tempo = Math.max(60, 80 + Math.floor(mic.volume * 50)); // 80-95
+    settings.noteDurationRange = { min: 500, max: 2500 };
+  }
+
+  // Adjust time signature (notes per measure) based on volume
+  const previousNoteCount = noteCountInMeasure;
+  if (mic.volume > 0.7) {
+    noteCountInMeasure = 7; // 7/8 time
+  } else if (mic.volume > 0.5) {
+    noteCountInMeasure = 6; // 6/8 time
+  } else if (mic.volume > 0.3) {
+    noteCountInMeasure = 4; // 4/4 time (standard)
+  } else if (mic.volume > 0.15) {
+    noteCountInMeasure = 3; // 3/4 time (waltz)
+  } else {
+    noteCountInMeasure = 2; // 2/4 time
+  }
+
+  // If note count changed, log it
+  if (previousNoteCount !== noteCountInMeasure) {
+    console.log(
+      `Time signature changed to ${noteCountInMeasure}/4 based on volume ${Math.round(mic.volume * 100)}%`,
+    );
+  }
+
+  // Modify density based on volume
+  settings.density = Math.min(0.9, 0.5 + mic.volume * 0.4); // 0.5 to 0.9
+
+  // Use dominant frequencies to influence pitch range
+  if (mic.dominantFrequencies.length > 0) {
+    // Get primary frequency (most dominant)
+    const primaryFreq = mic.dominantFrequencies[0];
+
+    // Map frequency to octave range (logarithmically)
+    // Lower frequencies -> lower octaves, higher frequencies -> higher octaves
+    if (primaryFreq < 100) {
+      settings.minOctave = 1;
+      settings.maxOctave = 3;
+    } else if (primaryFreq < 300) {
+      settings.minOctave = 2;
+      settings.maxOctave = 4;
+    } else if (primaryFreq < 1000) {
+      settings.minOctave = 3;
+      settings.maxOctave = 5;
+    } else if (primaryFreq < 3000) {
+      settings.minOctave = 4;
+      settings.maxOctave = 6;
+    } else {
+      settings.minOctave = 5;
+      settings.maxOctave = 7;
+    }
+  }
+
+  // Influence dynamic range based on volume variability
+  // (This would require tracking volume over time, for now we use a simplified approach)
+  if (mic.volume > 0.5) {
+    settings.velocityRange = { min: 80, max: 120 }; // Louder dynamics
+  } else if (mic.volume < 0.2) {
+    settings.velocityRange = { min: 30, max: 70 }; // Softer dynamics
+  } else {
+    settings.velocityRange = { min: 50, max: 90 }; // Medium dynamics
+  }
+
+  return settings;
+}
+
 // Helper function to get notes in the current key and scale
 function getScaleNotes(): number[] {
   return SCALES[currentScale].map((interval) => (currentKey + interval) % 12);
@@ -138,9 +289,16 @@ function getScaleNotes(): number[] {
 // Helper function to generate a random note in the current key and scale
 function generateRandomNote(
   weather: WeatherData | null,
+  micData: MicrophoneData | null = null,
   customOctaveRange?: { min: number; max: number },
 ): Note {
   const settings = applyWeatherInfluence(weather);
+
+  // Apply microphone influence if available
+  if (micData && micData.isActive) {
+    applyMicrophoneInfluence(micData, settings);
+  }
+
   const scaleNotes = getScaleNotes();
   const noteIndex = Math.floor(Math.random() * scaleNotes.length);
   const note = scaleNotes[noteIndex];
@@ -156,14 +314,14 @@ function generateRandomNote(
     octaveRange.min;
   const midiNum = note + octave * 12 + 12; // MIDI note numbers start at C0 = 12
 
-  // Velocity influenced by weather
+  // Velocity influenced by weather and microphone
   const velocity =
     Math.floor(
       Math.random() *
         (settings.velocityRange.max - settings.velocityRange.min + 1),
     ) + settings.velocityRange.min;
 
-  // Duration influenced by weather
+  // Duration influenced by weather and microphone
   const duration =
     Math.random() *
       (settings.noteDurationRange.max - settings.noteDurationRange.min) +
@@ -179,17 +337,27 @@ function generateRandomNote(
 }
 
 // Function to generate chords in the current key and scale
-function generateChord(weather: WeatherData | null, numNotes = 3): Note[] {
+function generateChord(
+  weather: WeatherData | null,
+  micData: MicrophoneData | null = null,
+  numNotes = 3,
+): Note[] {
   const settings = applyWeatherInfluence(weather);
+
+  // Apply microphone influence if available
+  if (micData && micData.isActive) {
+    applyMicrophoneInfluence(micData, settings);
+  }
+
   const scaleNotes = getScaleNotes();
   const rootIndex = Math.floor(Math.random() * scaleNotes.length);
   const rootNote = scaleNotes[rootIndex];
 
   const chordNotes: Note[] = [];
 
-  // Adjust octave range based on weather
+  // Adjust octave range based on weather and microphone
   const rootOctave =
-    Math.floor(Math.random() * 3) + Math.max(2, settings.minOctave); // Weather-influenced octaves
+    Math.floor(Math.random() * 3) + Math.max(2, settings.minOctave);
 
   // Root note with weather-influenced velocity and duration
   const rootVelocity =
@@ -228,29 +396,75 @@ function generateChord(weather: WeatherData | null, numNotes = 3): Note[] {
 }
 
 // Occasionally change key, scale, or mode
-function maybeChangeMusicalContext(): void {
+function maybeChangeMusicalContext(
+  microphoneData: MicrophoneData | null = null,
+): void {
   const now = Date.now();
 
-  // Change approximately every 3-5 minutes
-  if (now - lastModeChangeTime > 3 * 60 * 1000 && Math.random() < 0.01) {
-    // 1% chance per check when we're past the minimum time
-    const changeType = Math.floor(Math.random() * 3);
+  // Generate random musical events based on mic input
+  if (microphoneData?.isActive) {
+    // More frequent changes when microphone is active
+    if (now - lastModeChangeTime > 60 * 1000 && Math.random() < 0.03) {
+      const changeType = Math.floor(Math.random() * 3);
 
-    if (changeType === 0) {
-      // Change key
-      currentKey = Math.floor(Math.random() * 12);
-    } else if (changeType === 1) {
-      // Change scale
-      const scaleNames = Object.keys(SCALES) as Scale[];
-      currentScale = scaleNames[Math.floor(Math.random() * scaleNames.length)];
-    } else {
-      // Change both
-      currentKey = Math.floor(Math.random() * 12);
-      const scaleNames = Object.keys(SCALES) as Scale[];
-      currentScale = scaleNames[Math.floor(Math.random() * scaleNames.length)];
+      if (changeType === 0) {
+        // Change key
+        currentKey = Math.floor(Math.random() * 12);
+      } else if (changeType === 1) {
+        // Change scale - use either primary or one of secondary scales
+        const useSecondary = Math.random() < 0.6; // 60% chance to use secondary
+        if (useSecondary && secondaryScales.length > 0) {
+          // Pick one of the secondary scales
+          currentScale =
+            secondaryScales[Math.floor(Math.random() * secondaryScales.length)];
+        } else {
+          // Use primary scale
+          currentScale = primaryScale;
+        }
+      } else {
+        // Change both key and scale
+        currentKey = Math.floor(Math.random() * 12);
+        const useSecondary = Math.random() < 0.4; // 40% chance to use secondary
+        if (useSecondary && secondaryScales.length > 0) {
+          // Pick one of the secondary scales
+          currentScale =
+            secondaryScales[Math.floor(Math.random() * secondaryScales.length)];
+        } else {
+          // Use primary scale
+          currentScale = primaryScale;
+        }
+      }
+
+      console.log(
+        `Musical context changed: Key ${NOTES[currentKey]}, Scale ${currentScale}`,
+      );
+      lastModeChangeTime = now;
     }
+  } else {
+    // Standard behavior without microphone
+    // Change approximately every 3-5 minutes
+    if (now - lastModeChangeTime > 3 * 60 * 1000 && Math.random() < 0.01) {
+      // 1% chance per check when we're past the minimum time
+      const changeType = Math.floor(Math.random() * 3);
 
-    lastModeChangeTime = now;
+      if (changeType === 0) {
+        // Change key
+        currentKey = Math.floor(Math.random() * 12);
+      } else if (changeType === 1) {
+        // Change scale
+        const scaleNames = Object.keys(SCALES) as Scale[];
+        currentScale =
+          scaleNames[Math.floor(Math.random() * scaleNames.length)];
+      } else {
+        // Change both
+        currentKey = Math.floor(Math.random() * 12);
+        const scaleNames = Object.keys(SCALES) as Scale[];
+        currentScale =
+          scaleNames[Math.floor(Math.random() * scaleNames.length)];
+      }
+
+      lastModeChangeTime = now;
+    }
   }
 }
 
@@ -293,11 +507,17 @@ function decidePedal(weather: WeatherData | null): Pedal | null {
 // Main function to generate MIDI events
 export function generateMidiEvent(
   weather: WeatherData | null = null,
+  microphoneData: MicrophoneData | null = null,
 ): MidiEvent {
   _noteCounter++;
-  maybeChangeMusicalContext();
+  maybeChangeMusicalContext(microphoneData);
 
   const settings = applyWeatherInfluence(weather);
+
+  // Apply microphone influence if available
+  if (microphoneData && microphoneData.isActive) {
+    applyMicrophoneInfluence(microphoneData, settings);
+  }
 
   // Randomly introduce silence based on density setting
   if (Math.random() > settings.density) {
@@ -318,47 +538,129 @@ export function generateMidiEvent(
     };
   }
 
-  // Decide between note, chord, or counterpoint
+  // If microphone active, use dominant frequencies to influence note selection
+  if (
+    microphoneData?.isActive &&
+    microphoneData.dominantFrequencies.length > 0
+  ) {
+    // Generate interesting musical events based on microphone input
+    // The rarer the event, the more interesting but potentially disruptive it could be
+    const rareEventThreshold = 0.05; // 5% chance
+    const interestingEventThreshold = 0.15; // 15% chance
+
+    const eventType = Math.random();
+
+    if (eventType < rareEventThreshold) {
+      // Rare event - temporary scale modulation based on microphone
+      // We use one of the secondary scales for this special chord
+      const originalScale = currentScale;
+      currentScale =
+        secondaryScales[Math.floor(Math.random() * secondaryScales.length)];
+
+      // Generate a chord in this alternate scale
+      const specialChord = generateChord(weather, microphoneData, 4); // 4-note chord
+
+      // Restore original scale
+      currentScale = originalScale;
+
+      return {
+        type: "chord",
+        notes: specialChord,
+        currentKey: NOTES[currentKey],
+        currentScale: originalScale, // Return the main scale, not the temporary one
+      };
+    } else if (eventType < interestingEventThreshold) {
+      // Interesting but not rare event - counterpoint based on dominant frequencies
+      const numVoices = Math.min(
+        microphoneData.dominantFrequencies.length + 1,
+        4,
+      );
+      const notes: Note[] = [];
+
+      for (let i = 0; i < numVoices; i++) {
+        // Use microphone data to influence register
+        notes.push(
+          generateRandomNote(weather, microphoneData, {
+            min: settings.minOctave,
+            max: settings.maxOctave,
+          }),
+        );
+      }
+
+      return {
+        type: "counterpoint",
+        notes,
+        currentKey: NOTES[currentKey],
+        currentScale,
+      };
+    }
+  }
+
+  // Standard event generation
   const eventType = Math.random();
 
-  if (eventType < 0.5) {
+  // Adjust event probabilities based on note count in measure
+  const noteProb = noteCountInMeasure <= 3 ? 0.6 : 0.5; // More single notes in simpler time signatures
+  const chordProb = noteCountInMeasure >= 6 ? 0.4 : 0.3; // More chords in complex time signatures
+
+  if (eventType < noteProb) {
     // Generate a single note
     return {
       type: "note",
-      note: generateRandomNote(weather),
+      note: generateRandomNote(weather, microphoneData),
       currentKey: NOTES[currentKey],
       currentScale,
     };
-  } else if (eventType < 0.8) {
+  } else if (eventType < noteProb + chordProb) {
     // Generate a chord
-    const chordSize = Math.floor(Math.random() * 3) + 3; // 3-5 notes
+    // Adjust chord size based on time signature
+    const chordSize = Math.min(
+      Math.floor(Math.random() * 3) + 3, // 3-5 notes
+      noteCountInMeasure, // Limited by time signature
+    );
+
     return {
       type: "chord",
-      notes: generateChord(weather, chordSize),
+      notes: generateChord(weather, microphoneData, chordSize),
       currentKey: NOTES[currentKey],
       currentScale,
     };
   } else {
     // Generate counterpoint (2-4 notes across different registers)
-    const numVoices = Math.floor(Math.random() * 3) + 2; // 2-4 voices
+    // Adjust voice count based on time signature
+    const numVoices = Math.min(
+      Math.floor(Math.random() * 3) + 2, // 2-4 voices
+      Math.ceil(noteCountInMeasure / 2), // Limited by time signature
+    );
+
     const notes: Note[] = [];
 
     for (let i = 0; i < numVoices; i++) {
-      // Assign each voice to a different register, influenced by weather
-      const settings = applyWeatherInfluence(weather);
-      const range = Math.min(settings.maxOctave - settings.minOctave, 5);
+      // Assign each voice to a different register, influenced by weather and microphone
+      const localSettings = { ...settings };
+      if (microphoneData?.isActive) {
+        applyMicrophoneInfluence(microphoneData, localSettings);
+      }
+
+      const range = Math.min(
+        localSettings.maxOctave - localSettings.minOctave,
+        5,
+      );
       const segment = range / numVoices;
       const minOctave = Math.max(
-        settings.minOctave,
-        Math.floor(settings.minOctave + i * segment),
+        localSettings.minOctave,
+        Math.floor(localSettings.minOctave + i * segment),
       );
       const maxOctave = Math.min(
-        settings.maxOctave,
-        Math.ceil(settings.minOctave + (i + 1) * segment),
+        localSettings.maxOctave,
+        Math.ceil(localSettings.minOctave + (i + 1) * segment),
       );
 
       notes.push(
-        generateRandomNote(weather, { min: minOctave, max: maxOctave }),
+        generateRandomNote(weather, microphoneData, {
+          min: minOctave,
+          max: maxOctave,
+        }),
       );
     }
 

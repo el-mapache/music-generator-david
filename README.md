@@ -7,6 +7,7 @@ A virtual player piano application that generates minimalist counterpoint music 
 - Node.js server backend streaming MIDI notes and chords
 - Web Audio API for piano sound synthesis (no external libraries)
 - Minimalist counterpoint composition that changes over time
+- Microphone input to influence music generation
 - Support for piano pedals (sustain, sostenuto, soft)
 - Retro computer UI with live visualization
 - MIDI output support
@@ -56,9 +57,10 @@ The applications will be available at:
 ### Piano Interface
 1. Click the "START" button to begin generating and playing music
 2. Use the output selector to choose between browser audio and MIDI output
-3. The visualization will show currently playing notes
-4. Information about the current key, scale, and pedals will be displayed
-5. Click "STOP" to stop all playback
+3. Click "MIC: OFF" button to enable microphone input for influencing music generation
+4. The visualization will show currently playing notes
+5. Information about the current key, scale, and pedals will be displayed
+6. Click "STOP" to stop all playback
 
 ### Visualization Interface
 1. Click the "START" button to begin visualization generation
@@ -115,6 +117,11 @@ The application generates minimalist counterpoint music with:
 - Natural silences and dynamic changes
 - Support for pedal usage
 - Weather-influenced musical parameters
+- Microphone-influenced parameters:
+  - Dominant frequencies determine note selection
+  - Volume level affects tempo and time signature
+  - Audio characteristics influence musical scale selection
+  - Introduces rare musical events for interest
 
 ### Visualization Generation
 

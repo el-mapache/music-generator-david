@@ -33,6 +33,10 @@
           <option value="midi">MIDI OUTPUT</option>
         </select>
       </div>
+      
+      <div class="control-group">
+        <button id="mic-btn" class="btn" aria-label="Enable microphone input">MIC: OFF</button>
+      </div>
     </div>
 
     <div class="info-panel" aria-live="polite">
@@ -59,6 +63,14 @@
       <div class="info-row">
         <span class="info-label">WEATHER IMPACT:</span>
         <span id="weather-impact" class="info-value">--</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">MIC INPUT:</span>
+        <span id="mic-status" class="info-value">--</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">DOMINANT FREQUENCIES:</span>
+        <span id="mic-frequencies" class="info-value">--</span>
       </div>
     </div>
 

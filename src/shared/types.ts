@@ -32,6 +32,13 @@ export interface WeatherData {
   weatherDescription: string; // Text description of weather
 }
 
+// Microphone analysis data
+export interface MicrophoneData {
+  volume: number; // Volume level (0-1)
+  dominantFrequencies: number[]; // Array of dominant frequencies in Hz
+  isActive: boolean; // Whether microphone is active
+}
+
 // Types for MIDI events
 export type MidiEvent =
   | { type: "note"; note: Note; currentKey: string; currentScale: Scale }
