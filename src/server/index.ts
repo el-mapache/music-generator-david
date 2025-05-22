@@ -3,7 +3,7 @@ import http from "http";
 import { Server } from "socket.io";
 import path from "path";
 import { generateMidiEvent } from "./music-generator";
-import { WeatherData } from "../shared/types";
+import { WeatherData, MicrophoneData } from "../shared/types";
 import dotenv from "dotenv";
 import { freepikService } from "./freepik-service";
 
@@ -34,6 +34,7 @@ io.on("connection", (socket) => {
   let playing = false;
   let intervalId: NodeJS.Timeout | null = null;
   let currentWeather: WeatherData | null = null;
+  let currentMicrophoneData: MicrophoneData | null = null;
   let freepikIntervalId: NodeJS.Timeout | null = null;
 
   // Start streaming MIDI events
@@ -44,7 +45,7 @@ io.on("connection", (socket) => {
 
       // Generate MIDI events at regular intervals
       intervalId = setInterval(() => {
-        const event = generateMidiEvent(currentWeather);
+        const event = generateMidiEvent(currentWeather, currentMicrophoneData);
         socket.emit("midi", event);
       }, 100); // Generate events every 100ms (adjust as needed)
     }
@@ -59,6 +60,18 @@ io.on("connection", (socket) => {
 
     // Update Freepik service with weather data
     freepikService.updateWeather(weatherData);
+  });
+
+  // Handle microphone data from client
+  socket.on("microphone", (microphoneData: MicrophoneData) => {
+    if (microphoneData.isActive) {
+      console.log(
+        `Microphone data received: Volume: ${Math.round(microphoneData.volume * 100)}%, Dominant frequencies: ${microphoneData.dominantFrequencies.join(", ")} Hz`,
+      );
+    } else {
+      console.log("Microphone deactivated");
+    }
+    currentMicrophoneData = microphoneData;
   });
 
   // Handle notes updates for Freepik service
