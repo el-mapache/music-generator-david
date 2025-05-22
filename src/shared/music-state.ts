@@ -1,10 +1,11 @@
 import { io, Socket } from "socket.io-client";
-import { MidiEvent, Note, WeatherData } from "./types";
+import { MidiEvent, Note, WeatherData, MicrophoneData } from "./types";
 
 // Event types for subscribers
 export type MusicStateEvent =
   | { type: "notes-updated" }
   | { type: "weather-updated" }
+  | { type: "microphone-updated" }
   | { type: "key-updated" }
   | { type: "pedals-updated" }
   | { type: "all-notes-off" };
@@ -22,6 +23,7 @@ class MusicStateService {
   // State variables
   private notesPlaying: Note[] = [];
   private weatherData: WeatherData | null = null;
+  private microphoneData: MicrophoneData | null = null;
   private currentKey: string = "";
   private currentScale: string = "";
 
@@ -179,11 +181,23 @@ class MusicStateService {
     return this.weatherData;
   }
 
+  // Get current microphone data
+  public getMicrophoneData(): MicrophoneData | null {
+    return this.microphoneData;
+  }
+
   // Set weather data and notify server
   public setWeatherData(weatherData: WeatherData) {
     this.weatherData = weatherData;
     this.socket.emit("weather", weatherData);
     this.notifySubscribers({ type: "weather-updated" });
+  }
+
+  // Set microphone data and notify server
+  public setMicrophoneData(microphoneData: MicrophoneData) {
+    this.microphoneData = microphoneData;
+    this.socket.emit("microphone", microphoneData);
+    this.notifySubscribers({ type: "microphone-updated" });
   }
 
   // Send commands to server

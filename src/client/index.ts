@@ -10,6 +10,7 @@ const stopButton = document.getElementById("stop-btn") as HTMLButtonElement;
 const outputSelect = document.getElementById(
   "output-select",
 ) as HTMLSelectElement;
+const micButton = document.getElementById("mic-btn") as HTMLButtonElement;
 const visualization = document.getElementById(
   "visualization",
 ) as HTMLDivElement;
@@ -29,12 +30,19 @@ const weatherInfoDisplay = document.getElementById(
 const weatherImpactDisplay = document.getElementById(
   "weather-impact",
 ) as HTMLElement;
+const micStatusDisplay = document.getElementById("mic-status") as HTMLElement;
+const micFrequenciesDisplay = document.getElementById("mic-frequencies") as HTMLElement;
 const consoleOutput = document.getElementById("console-output") as HTMLElement;
 
 // AudioContext and MIDI
 let audioContext: AudioContext | null = null;
 let gainNode: GainNode | null = null;
 let midiOutput: WebMidi.MIDIOutput | null = null;
+let microphoneStream: MediaStream | null = null;
+let microphoneSource: MediaStreamAudioSourceNode | null = null;
+let analyser: AnalyserNode | null = null;
+let microphoneActive = false;
+let microphoneAnalysisInterval: number | null = null;
 const activeNotes: Map<
   number,
   { oscillator: OscillatorNode; gainNode: GainNode; endTime: number }
@@ -55,6 +63,148 @@ function initAudio() {
     gainNode.gain.value = 0.5;
     gainNode.connect(audioContext.destination);
     logToConsole("Audio initialized");
+  }
+}
+
+// Initialize microphone
+async function toggleMicrophone() {
+  initAudio();
+  if (!audioContext) return;
+  
+  if (!microphoneActive) {
+    try {
+      // Request microphone access
+      microphoneStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: false
+      });
+      
+      // Create source and analyzer
+      microphoneSource = audioContext.createMediaStreamSource(microphoneStream);
+      analyser = audioContext.createAnalyser();
+      
+      // Configure analyzer
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.8;
+      
+      // Connect microphone source to analyzer
+      microphoneSource.connect(analyser);
+      
+      // Start microphone analysis
+      microphoneActive = true;
+      micButton.textContent = "MIC: ON";
+      micStatusDisplay.textContent = "Active";
+      logToConsole("Microphone activated");
+      
+      // Start regular analysis
+      startMicrophoneAnalysis();
+    } catch (error) {
+      logToConsole(`Error accessing microphone: ${error}`);
+      micStatusDisplay.textContent = `Error: ${error}`;
+    }
+  } else {
+    // Stop microphone
+    if (microphoneStream) {
+      microphoneStream.getTracks().forEach(track => track.stop());
+      microphoneStream = null;
+    }
+    if (microphoneSource) {
+      microphoneSource.disconnect();
+      microphoneSource = null;
+    }
+    if (microphoneAnalysisInterval !== null) {
+      clearInterval(microphoneAnalysisInterval);
+      microphoneAnalysisInterval = null;
+    }
+    
+    microphoneActive = false;
+    micButton.textContent = "MIC: OFF";
+    micStatusDisplay.textContent = "Inactive";
+    micFrequenciesDisplay.textContent = "--";
+    logToConsole("Microphone deactivated");
+    
+    // Send empty microphone data to server
+    musicState.setMicrophoneData({
+      volume: 0,
+      dominantFrequencies: [],
+      isActive: false
+    });
+  }
+}
+
+// Start analyzing microphone input at regular intervals
+function startMicrophoneAnalysis() {
+  if (microphoneAnalysisInterval !== null) {
+    clearInterval(microphoneAnalysisInterval);
+  }
+  
+  microphoneAnalysisInterval = window.setInterval(() => {
+    analyzeAudio();
+  }, 100); // Analyze every 100ms
+}
+
+// Analyze audio from microphone
+function analyzeAudio() {
+  if (!analyser || !microphoneActive) return;
+  
+  // Get frequency data
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength);
+  analyser.getByteFrequencyData(dataArray);
+  
+  // Calculate overall volume (0-1)
+  let sum = 0;
+  for (let i = 0; i < bufferLength; i++) {
+    sum += dataArray[i];
+  }
+  const volume = sum / (bufferLength * 255); // Normalize to 0-1
+  
+  // Find dominant frequencies
+  const dominantFrequencies = findDominantFrequencies(dataArray, 3);
+  
+  // Update UI
+  updateMicrophoneDisplay(volume, dominantFrequencies);
+  
+  // Send data to music state
+  musicState.setMicrophoneData({
+    volume,
+    dominantFrequencies,
+    isActive: true
+  });
+}
+
+// Find N dominant frequencies in the spectrum
+function findDominantFrequencies(dataArray: Uint8Array, count: number): number[] {
+  if (!analyser) return [];
+  
+  const sampleRate = audioContext?.sampleRate || 44100;
+  const binCount = analyser.frequencyBinCount;
+  const freqResolution = sampleRate / (2 * binCount); // Hz per bin
+  
+  // Create array of [index, value] pairs
+  const pairs = Array.from(dataArray).map((value, index) => [index, value]);
+  
+  // Sort by value (amplitude) in descending order
+  pairs.sort((a, b) => b[1] - a[1]);
+  
+  // Take the top N frequencies, convert indices to frequency values
+  return pairs
+    .slice(0, count)
+    .filter(pair => pair[1] > 30) // Only consider frequencies with significant amplitude
+    .map(pair => Math.round(pair[0] * freqResolution));
+}
+
+// Update microphone display
+function updateMicrophoneDisplay(volume: number, frequencies: number[]) {
+  const volumePercent = Math.round(volume * 100);
+  micStatusDisplay.textContent = `Volume: ${volumePercent}%`;
+  
+  if (frequencies.length > 0) {
+    micFrequenciesDisplay.textContent = frequencies
+      .map(f => `${f} Hz`)
+      .join(", ");
+  } else {
+    micFrequenciesDisplay.textContent = "None detected";
   }
 }
 
@@ -643,6 +793,10 @@ stopButton.addEventListener("click", () => {
   logToConsole("Stopping MIDI stream");
 });
 
+micButton.addEventListener("click", () => {
+  toggleMicrophone();
+});
+
 outputSelect.addEventListener("change", () => {
   if (outputSelect.value === "midi") {
     initMidi().then((success) => {
@@ -660,6 +814,12 @@ window.addEventListener("beforeunload", () => {
   stopAllNotes();
   if (weatherUpdateInterval !== null) {
     clearInterval(weatherUpdateInterval);
+  }
+  if (microphoneStream) {
+    microphoneStream.getTracks().forEach(track => track.stop());
+  }
+  if (microphoneAnalysisInterval !== null) {
+    clearInterval(microphoneAnalysisInterval);
   }
 });
 
